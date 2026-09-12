@@ -68,28 +68,31 @@ def aggregate_telemetry(telemetry: pd.DataFrame) -> dict[str, float | None]:
     if telemetry.empty:
         raise ValueError("telemetry must contain at least one sample")
 
-    def average(column: str) -> float | None:
+    def numeric_values(column: str) -> pd.Series | None:
         if column not in telemetry:
             return None
         source = telemetry[column]
         values = pd.to_numeric(source, errors="coerce")
         if (source.notna() & values.isna()).any():
             raise ValueError(f"{column} contains invalid numeric values")
-        values = values.dropna()
+        return values.dropna()
+
+    def average(column: str) -> float | None:
+        values = numeric_values(column)
+        if values is None:
+            return None
         return None if values.empty else float(values.mean())
 
     def maximum(column: str) -> float | None:
-        if column not in telemetry:
+        values = numeric_values(column)
+        if values is None:
             return None
-        source = telemetry[column]
-        values = pd.to_numeric(source, errors="coerce")
-        if (source.notna() & values.isna()).any():
-            raise ValueError(f"{column} contains invalid numeric values")
-        values = values.dropna()
         return None if values.empty else float(values.max())
 
     brake_usage = None
     brake_duration_seconds = None
+    braking_intensity = None
+    braking_frequency = None
     if "Brake" in telemetry:
         brake_source = telemetry["Brake"]
         brake_samples = pd.to_numeric(brake_source, errors="coerce")
@@ -102,6 +105,10 @@ def aggregate_telemetry(telemetry: pd.DataFrame) -> dict[str, float | None]:
             if valid_brake_samples.empty
             else float(valid_brake_samples.gt(0).mean())
         )
+        if not valid_brake_samples.empty:
+            braking_frequency = float(
+                (braking & ~braking.shift(1, fill_value=False)).sum()
+            )
         if "Time" in telemetry:
             time_source = telemetry["Time"]
             times = pd.to_timedelta(time_source, errors="coerce")
@@ -111,6 +118,31 @@ def aggregate_telemetry(telemetry: pd.DataFrame) -> dict[str, float | None]:
             brake_duration_seconds = float(
                 intervals.where(braking).dropna().dt.total_seconds().sum()
             )
+            speed = numeric_values("Speed")
+            if speed is not None:
+                speed = speed.reindex(telemetry.index)
+                elapsed_seconds = times.diff().dt.total_seconds()
+                deceleration = -speed.diff() / elapsed_seconds
+                braking_deceleration = deceleration[
+                    braking & deceleration.gt(0) & elapsed_seconds.gt(0)
+                ]
+                if not braking_deceleration.empty:
+                    braking_intensity = float(braking_deceleration.mean())
+
+    speed_variation = None
+    speed = numeric_values("Speed")
+    if speed is not None and not speed.empty:
+        speed_variation = float(speed.std(ddof=0))
+
+    throttle_aggressiveness = None
+    throttle = numeric_values("Throttle")
+    if throttle is not None:
+        speed = numeric_values("Speed")
+        if speed is not None:
+            accelerating = speed.reindex(telemetry.index).diff().gt(0)
+            accelerating_throttle = throttle.reindex(telemetry.index)[accelerating].dropna()
+            if not accelerating_throttle.empty:
+                throttle_aggressiveness = float(accelerating_throttle.mean())
 
     drs_usage_fraction = None
     if "DRS" in telemetry:
@@ -129,6 +161,10 @@ def aggregate_telemetry(telemetry: pd.DataFrame) -> dict[str, float | None]:
         "average_brake": brake_usage,
         "brake_usage_fraction": brake_usage,
         "brake_duration_seconds": brake_duration_seconds,
+        "braking_intensity": braking_intensity,
+        "braking_frequency": braking_frequency,
+        "throttle_aggressiveness": throttle_aggressiveness,
+        "speed_variation": speed_variation,
         "average_rpm": average("RPM"),
         "drs_usage_fraction": drs_usage_fraction,
     }

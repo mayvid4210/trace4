@@ -80,6 +80,9 @@ def test_add_telemetry_features_uses_real_telemetry_aggregates(
     assert features.loc[0, "AvgThrottle"] == 65.0
     assert features.loc[0, "BrakeUsage"] == 0.5
     assert features.loc[0, "BrakeDuration"] == 2.0
+    assert features.loc[0, "BrakingFrequency"] == 1.0
+    assert features.loc[0, "ThrottleAggressiveness"] == 70.0
+    assert len(features) == len(laps)
     pd.testing.assert_frame_equal(laps, original)
 
 
@@ -97,7 +100,45 @@ def test_add_telemetry_features_keeps_missing_values_when_unavailable(
 
     features = add_telemetry_features(laps, session=object())
 
-    assert features[["AvgSpeed", "MaxSpeed", "AvgThrottle", "BrakeUsage", "BrakeDuration"]].isna().all(axis=None)
+    assert features[
+        [
+            "AvgSpeed",
+            "MaxSpeed",
+            "AvgThrottle",
+            "BrakeUsage",
+            "BrakeDuration",
+            "BrakingIntensity",
+            "BrakingFrequency",
+            "ThrottleAggressiveness",
+            "SpeedVariation",
+        ]
+    ].isna().all(axis=None)
+
+
+def test_add_telemetry_features_does_not_share_values_between_laps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    laps = pd.DataFrame({"Driver": ["A", "A"], "LapNumber": [1.0, 2.0]})
+
+    def lap_values(session: object, driver: str, lap_number: float) -> dict[str, float]:
+        return {
+            "average_speed": lap_number,
+            "maximum_speed": lap_number,
+            "average_throttle": lap_number,
+            "brake_usage_fraction": lap_number,
+            "brake_duration_seconds": lap_number,
+            "braking_intensity": lap_number,
+            "braking_frequency": lap_number,
+            "throttle_aggressiveness": lap_number,
+            "speed_variation": lap_number,
+        }
+
+    monkeypatch.setattr(feature_module, "get_lap_telemetry_features", lap_values)
+
+    features = add_telemetry_features(laps, session=object())
+
+    assert features["AvgSpeed"].tolist() == [1.0, 2.0]
+    assert features["BrakingFrequency"].tolist() == [1.0, 2.0]
 
 
 def test_add_weather_track_features_preserves_real_source_values() -> None:

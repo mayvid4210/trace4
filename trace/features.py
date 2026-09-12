@@ -54,6 +54,10 @@ def add_telemetry_features(laps: pd.DataFrame, session: object) -> pd.DataFrame:
         "AvgThrottle": "average_throttle",
         "BrakeUsage": "brake_usage_fraction",
         "BrakeDuration": "brake_duration_seconds",
+        "BrakingIntensity": "braking_intensity",
+        "BrakingFrequency": "braking_frequency",
+        "ThrottleAggressiveness": "throttle_aggressiveness",
+        "SpeedVariation": "speed_variation",
     }
     values_by_feature = {name: [] for name in feature_names}
 

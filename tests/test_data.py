@@ -90,6 +90,10 @@ def test_aggregate_telemetry_calculates_basic_features() -> None:
         "average_brake": 0.5,
         "brake_usage_fraction": 0.5,
         "brake_duration_seconds": 2.0,
+        "braking_intensity": None,
+        "braking_frequency": 1.0,
+        "throttle_aggressiveness": 70.0,
+        "speed_variation": pytest.approx(22.360679774997898),
         "average_rpm": 11_500.0,
         "drs_usage_fraction": 0.5,
     }
@@ -105,8 +109,31 @@ def test_aggregate_telemetry_allows_missing_optional_fields() -> None:
     assert features["drs_usage_fraction"] is None
 
 
+def test_aggregate_telemetry_calculates_driver_style_features() -> None:
+    telemetry = pd.DataFrame(
+        {
+            "Time": pd.to_timedelta([0, 1, 2, 3, 4], unit="s"),
+            "Speed": [200, 180, 160, 170, 150],
+            "Throttle": [10, 20, 30, 40, 50],
+            "Brake": [False, True, True, False, True],
+        }
+    )
+
+    features = aggregate_telemetry(telemetry)
+
+    assert features["braking_intensity"] == 20.0
+    assert features["braking_frequency"] == 2.0
+    assert features["throttle_aggressiveness"] == 40.0
+    assert features["speed_variation"] == pytest.approx(17.204650534085253)
+
+
 def test_aggregate_telemetry_rejects_invalid_numeric_values() -> None:
     telemetry = pd.DataFrame({"Speed": [100, "not-a-speed"]})
 
     with pytest.raises(ValueError, match="Speed"):
         aggregate_telemetry(telemetry)
+
+
+def test_aggregate_telemetry_rejects_empty_telemetry() -> None:
+    with pytest.raises(ValueError, match="at least one sample"):
+        aggregate_telemetry(pd.DataFrame())
