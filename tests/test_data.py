@@ -38,6 +38,7 @@ def test_clean_laps_returns_expected_schema_and_removes_invalid_times() -> None:
             "LapTime": [pd.Timedelta(seconds=91), pd.NaT, pd.Timedelta(0)],
             "Compound": ["SOFT", "SOFT", "MEDIUM"],
             "TyreLife": [1.0, 1.0, 1.0],
+            "Stint": [1.0, 1.0, 1.0],
             "TrackStatus": ["1", "1", "1"],
         }
     )
@@ -57,6 +58,7 @@ def test_clean_laps_returns_expected_schema_and_removes_invalid_times() -> None:
     assert len(clean) == 1
     assert clean.loc[0, "Driver"] == "VER"
     assert clean.loc[0, "TrackTemp"] == 35.0
+    assert clean.loc[0, "Stint"] == 1.0
     assert clean.loc[0, "LapTime"] == pd.Timedelta(seconds=91)
 
 
@@ -101,3 +103,10 @@ def test_aggregate_telemetry_allows_missing_optional_fields() -> None:
     assert features["average_throttle"] is None
     assert features["brake_duration_seconds"] is None
     assert features["drs_usage_fraction"] is None
+
+
+def test_aggregate_telemetry_rejects_invalid_numeric_values() -> None:
+    telemetry = pd.DataFrame({"Speed": [100, "not-a-speed"]})
+
+    with pytest.raises(ValueError, match="Speed"):
+        aggregate_telemetry(telemetry)

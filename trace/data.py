@@ -11,6 +11,7 @@ LAP_COLUMNS = [
     "LapTime",
     "Compound",
     "TyreLife",
+    "Stint",
     "PitInTime",
     "PitOutTime",
     "TrackStatus",
@@ -70,23 +71,42 @@ def aggregate_telemetry(telemetry: pd.DataFrame) -> dict[str, float | None]:
     def average(column: str) -> float | None:
         if column not in telemetry:
             return None
-        values = pd.to_numeric(telemetry[column], errors="coerce").dropna()
+        source = telemetry[column]
+        values = pd.to_numeric(source, errors="coerce")
+        if (source.notna() & values.isna()).any():
+            raise ValueError(f"{column} contains invalid numeric values")
+        values = values.dropna()
         return None if values.empty else float(values.mean())
 
     def maximum(column: str) -> float | None:
         if column not in telemetry:
             return None
-        values = pd.to_numeric(telemetry[column], errors="coerce").dropna()
+        source = telemetry[column]
+        values = pd.to_numeric(source, errors="coerce")
+        if (source.notna() & values.isna()).any():
+            raise ValueError(f"{column} contains invalid numeric values")
+        values = values.dropna()
         return None if values.empty else float(values.max())
 
     brake_usage = None
     brake_duration_seconds = None
     if "Brake" in telemetry:
-        brake_samples = pd.to_numeric(telemetry["Brake"], errors="coerce")
-        braking = brake_samples.fillna(0).gt(0)
-        brake_usage = float(braking.mean())
+        brake_source = telemetry["Brake"]
+        brake_samples = pd.to_numeric(brake_source, errors="coerce")
+        if (brake_source.notna() & brake_samples.isna()).any():
+            raise ValueError("Brake contains invalid numeric values")
+        valid_brake_samples = brake_samples.dropna()
+        braking = brake_samples.gt(0)
+        brake_usage = (
+            None
+            if valid_brake_samples.empty
+            else float(valid_brake_samples.gt(0).mean())
+        )
         if "Time" in telemetry:
-            times = pd.to_timedelta(telemetry["Time"], errors="coerce")
+            time_source = telemetry["Time"]
+            times = pd.to_timedelta(time_source, errors="coerce")
+            if (time_source.notna() & times.isna()).any():
+                raise ValueError("Time contains invalid values")
             intervals = times.shift(-1) - times
             brake_duration_seconds = float(
                 intervals.where(braking).dropna().dt.total_seconds().sum()
@@ -123,4 +143,4 @@ def get_lap_telemetry_features(
     if matching_laps.empty:
         raise ValueError(f"no lap {lap_number} found for driver {driver}")
 
-    return aggregate_telemetry(matching_laps.iloc[0].get_telemetry())
+    return aggregate_telemetry(matching_laps.iloc[0].get_car_data())
