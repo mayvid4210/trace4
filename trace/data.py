@@ -9,6 +9,7 @@ LAP_COLUMNS = [
     "Driver",
     "LapNumber",
     "LapTime",
+    "Position",
     "Compound",
     "TyreLife",
     "Stint",
@@ -60,7 +61,9 @@ def load_race(year: int, event: str, session_type: str = "R") -> pd.DataFrame:
 
     session = fastf1.get_session(year, event, session_type)
     session.load()
-    return clean_laps(session.laps, session.laps.get_weather_data())
+    laps = clean_laps(session.laps, session.laps.get_weather_data())
+    laps["Event"] = event
+    return laps
 
 
 def aggregate_telemetry(telemetry: pd.DataFrame) -> dict[str, float | None]:

@@ -13,6 +13,7 @@ def test_load_race_uses_supplied_session_details(
     monkeypatch: pytest.MonkeyPatch, event: str
 ) -> None:
     calls: list[tuple[int, str, str]] = []
+    cleaned = pd.DataFrame({"Driver": ["VER"]})
     session = SimpleNamespace(
         laps=SimpleNamespace(get_weather_data=lambda: "weather"), load=lambda: None
     )
@@ -22,11 +23,11 @@ def test_load_race_uses_supplied_session_details(
         return session
 
     monkeypatch.setitem(sys.modules, "fastf1", SimpleNamespace(get_session=get_session))
-    monkeypatch.setattr(data, "clean_laps", lambda laps, weather: pd.DataFrame())
+    monkeypatch.setattr(data, "clean_laps", lambda laps, weather: cleaned)
 
     result = data.load_race(2024, event, "R")
 
-    assert result.empty
+    assert result["Event"].tolist() == [event]
     assert calls == [(2024, event, "R")]
 
 
@@ -36,6 +37,7 @@ def test_clean_laps_returns_expected_schema_and_removes_invalid_times() -> None:
             "Driver": ["VER", "PER", "SAI"],
             "LapNumber": [1, 1, 1],
             "LapTime": [pd.Timedelta(seconds=91), pd.NaT, pd.Timedelta(0)],
+            "Position": [1.0, 2.0, 3.0],
             "Compound": ["SOFT", "SOFT", "MEDIUM"],
             "TyreLife": [1.0, 1.0, 1.0],
             "Stint": [1.0, 1.0, 1.0],
@@ -57,6 +59,7 @@ def test_clean_laps_returns_expected_schema_and_removes_invalid_times() -> None:
     assert list(clean.columns) == LAP_COLUMNS
     assert len(clean) == 1
     assert clean.loc[0, "Driver"] == "VER"
+    assert clean.loc[0, "Position"] == 1.0
     assert clean.loc[0, "TrackTemp"] == 35.0
     assert clean.loc[0, "Stint"] == 1.0
     assert clean.loc[0, "LapTime"] == pd.Timedelta(seconds=91)

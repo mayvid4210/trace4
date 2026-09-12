@@ -6,6 +6,8 @@ from trace.data import aggregate_telemetry
 from trace.features import (
     TYRE_POSITIONS,
     add_telemetry_features,
+    add_opponent_context_features,
+    add_track_evolution_proxy,
     add_tyre_residual_features,
     add_weather_track_features,
     build_tyre_features,
@@ -238,3 +240,92 @@ def test_add_tyre_residual_features_rejects_invalid_window(window: object) -> No
 
     with pytest.raises(ValueError, match="window"):
         add_tyre_residual_features(laps, window=window)
+
+
+def test_add_opponent_context_features_matches_adjacent_positions() -> None:
+    laps = pd.DataFrame(
+        {
+            "Driver": ["LEADER", "MIDDLE", "LAST"],
+            "LapNumber": [1.0, 1.0, 1.0],
+            "Position": [1.0, 2.0, 3.0],
+            "Compound": ["SOFT", "MEDIUM", "HARD"],
+            "TyreLife": [2.0, 3.0, 4.0],
+            "LapTime": pd.to_timedelta([90.0, 91.0, 92.0], unit="s"),
+            "ExistingFeature": [1, 2, 3],
+        }
+    )
+    original = laps.copy()
+
+    result = add_opponent_context_features(laps)
+
+    middle = result.loc[result["Driver"] == "MIDDLE"].iloc[0]
+    leader = result.loc[result["Driver"] == "LEADER"].iloc[0]
+    last = result.loc[result["Driver"] == "LAST"].iloc[0]
+    assert result["Driver"].tolist() == ["LEADER", "MIDDLE", "LAST"]
+    assert result["Position"].tolist() == [1.0, 2.0, 3.0]
+    assert middle["OpponentAheadDriver"] == "LEADER"
+    assert middle["OpponentBehindDriver"] == "LAST"
+    assert middle["OpponentAheadPosition"] == 1.0
+    assert middle["OpponentBehindPosition"] == 3.0
+    assert middle["OpponentAheadCompound"] == "SOFT"
+    assert middle["OpponentBehindCompound"] == "HARD"
+    assert middle["OpponentAheadTyreLife"] == 2.0
+    assert middle["OpponentBehindTyreLife"] == 4.0
+    assert middle["RelativePaceToAhead"] == 1.0
+    assert middle["RelativePaceToBehind"] == -1.0
+    assert pd.isna(leader["OpponentAheadDriver"])
+    assert pd.isna(last["OpponentBehindDriver"])
+    pd.testing.assert_frame_equal(result[original.columns], original)
+    pd.testing.assert_frame_equal(laps, original)
+
+
+def test_add_opponent_context_features_keeps_missing_opponents_missing() -> None:
+    laps = pd.DataFrame(
+        {
+            "Driver": ["LEADER", "THIRD"],
+            "LapNumber": [1.0, 1.0],
+            "Position": [1.0, 3.0],
+            "Compound": ["SOFT", "HARD"],
+            "TyreLife": [2.0, 4.0],
+            "LapTime": pd.to_timedelta([90.0, 92.0], unit="s"),
+        }
+    )
+
+    result = add_opponent_context_features(laps)
+
+    assert result["OpponentBehindDriver"].isna().all()
+    assert result["OpponentAheadDriver"].isna().all()
+
+
+def test_add_track_evolution_proxy_is_causal_and_session_specific() -> None:
+    laps = pd.DataFrame(
+        {
+            "LapNumber": [1.0, 1.0, 2.0, 2.0],
+            "LapTime": pd.to_timedelta([100.0, 102.0, 98.0, 104.0], unit="s"),
+        }
+    )
+    original = laps.copy()
+
+    result = add_track_evolution_proxy(laps)
+    later_laps = pd.concat(
+        [
+            laps,
+            pd.DataFrame(
+                {"LapNumber": [3.0], "LapTime": pd.to_timedelta([200.0], unit="s")}
+            ),
+        ],
+        ignore_index=True,
+    )
+    with_future = add_track_evolution_proxy(later_laps)
+    new_session = add_track_evolution_proxy(
+        pd.DataFrame(
+            {"LapNumber": [1.0], "LapTime": pd.to_timedelta([80.0], unit="s")}
+        )
+    )
+
+    assert result["TrackEvolutionProxy"].tolist() == [101.0, 101.0, 101.0, 101.0]
+    assert with_future.loc[:3, "TrackEvolutionProxy"].tolist() == result[
+        "TrackEvolutionProxy"
+    ].tolist()
+    assert new_session["TrackEvolutionProxy"].tolist() == [80.0]
+    pd.testing.assert_frame_equal(laps, original)

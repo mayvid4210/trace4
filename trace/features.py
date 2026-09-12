@@ -131,3 +131,83 @@ def add_tyre_residual_features(laps: pd.DataFrame, window: int = 3) -> pd.DataFr
         ordered.sort_values("_trace_original_order", kind="stable")
         .drop(columns="_trace_original_order")
     )
+
+
+def add_opponent_context_features(laps: pd.DataFrame) -> pd.DataFrame:
+    """Add same-lap opponent context by adjacent recorded race position.
+
+    Relative pace is current LapTime minus the opponent's LapTime in seconds;
+    a positive value means the current lap was slower. No on-track time gaps
+    are inferred from these lap-level records.
+    """
+    required_columns = {
+        "Driver",
+        "LapNumber",
+        "Position",
+        "Compound",
+        "TyreLife",
+        "LapTime",
+    }
+    missing_columns = required_columns.difference(laps.columns)
+    if missing_columns:
+        names = ", ".join(sorted(missing_columns))
+        raise ValueError(f"laps is missing required columns: {names}")
+
+    result = laps.copy()
+    position = pd.to_numeric(laps["Position"], errors="coerce")
+    lap_time = pd.to_timedelta(laps["LapTime"], errors="coerce")
+    valid_opponents = laps.assign(_position=position).dropna(
+        subset=["LapNumber", "_position"]
+    )
+    valid_opponents = valid_opponents.loc[
+        ~valid_opponents.duplicated(["LapNumber", "_position"], keep=False)
+    ]
+
+    opponent_columns = ["Driver", "Position", "Compound", "TyreLife", "LapTime"]
+    lookup = valid_opponents.set_index(["LapNumber", "_position"])[opponent_columns]
+    for direction, offset in (("Ahead", -1), ("Behind", 1)):
+        values = []
+        for lap_number, current_position in zip(laps["LapNumber"], position):
+            key = (lap_number, current_position + offset)
+            values.append(lookup.loc[key] if key in lookup.index else None)
+
+        for source_column in opponent_columns:
+            name = f"Opponent{direction}{source_column}"
+            result[name] = [
+                None if value is None else value[source_column] for value in values
+            ]
+
+        opponent_seconds = pd.to_timedelta(
+            result[f"Opponent{direction}LapTime"], errors="coerce"
+        ).dt.total_seconds()
+        result[f"RelativePaceTo{direction}"] = lap_time.dt.total_seconds() - opponent_seconds
+
+    return result
+
+
+def add_track_evolution_proxy(laps: pd.DataFrame) -> pd.DataFrame:
+    """Add a causal per-session cumulative median lap-time proxy in seconds.
+
+    For race lap ``L``, the proxy is the median of valid lap times from every
+    driver whose LapNumber is less than or equal to ``L`` in this input session.
+    """
+    required_columns = {"LapNumber", "LapTime"}
+    missing_columns = required_columns.difference(laps.columns)
+    if missing_columns:
+        names = ", ".join(sorted(missing_columns))
+        raise ValueError(f"laps is missing required columns: {names}")
+
+    lap_numbers = pd.to_numeric(laps["LapNumber"], errors="coerce")
+    lap_times = pd.to_timedelta(laps["LapTime"], errors="coerce")
+    if lap_numbers.isna().any() or lap_times.isna().any() or (lap_times <= pd.Timedelta(0)).any():
+        raise ValueError("LapNumber and LapTime must contain valid values")
+
+    result = laps.copy()
+    lap_seconds = lap_times.dt.total_seconds()
+    proxy_by_lap: dict[float, float] = {}
+    history: list[float] = []
+    for lap_number in sorted(lap_numbers.unique()):
+        history.extend(lap_seconds[lap_numbers == lap_number].tolist())
+        proxy_by_lap[lap_number] = float(pd.Series(history).median())
+    result["TrackEvolutionProxy"] = lap_numbers.map(proxy_by_lap)
+    return result
