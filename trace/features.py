@@ -14,6 +14,22 @@ from trace.data import get_lap_telemetry_features
 TyrePosition = Literal["FL", "FR", "RL", "RR"]
 TYRE_POSITIONS: tuple[TyrePosition, ...] = ("FL", "FR", "RL", "RR")
 
+_LAGGED_DRIVER_CONTEXT_COLUMNS = [
+    "AvgSpeed",
+    "AvgThrottle",
+    "BrakeUsage",
+    "BrakeDuration",
+    "BrakingIntensity",
+    "BrakingFrequency",
+    "ThrottleAggressiveness",
+    "SpeedVariation",
+    "Position",
+    "RelativePaceToAhead",
+    "RelativePaceToBehind",
+    "OpponentAheadCompound",
+    "OpponentAheadTyreLife",
+]
+
 
 def build_tyre_features(laps: pd.DataFrame, total_race_laps: float) -> pd.DataFrame:
     """Add tyre/stint and race-progression features without mutating ``laps``."""
@@ -211,3 +227,45 @@ def add_track_evolution_proxy(laps: pd.DataFrame) -> pd.DataFrame:
         proxy_by_lap[lap_number] = float(pd.Series(history).median())
     result["TrackEvolutionProxy"] = lap_numbers.map(proxy_by_lap)
     return result
+
+
+def add_lagged_context_features(laps: pd.DataFrame) -> pd.DataFrame:
+    """Add driver-lagged context and a prior-race-lap track proxy.
+
+    Driver context is shifted by chronological LapNumber within Driver. The
+    track proxy for lap L is mapped from the most recent earlier race lap, so
+    it never uses TrackEvolutionProxy from L itself.
+    """
+    required_columns = {
+        "Driver",
+        "LapNumber",
+        "TrackEvolutionProxy",
+        *_LAGGED_DRIVER_CONTEXT_COLUMNS,
+    }
+    missing_columns = required_columns.difference(laps.columns)
+    if missing_columns:
+        names = ", ".join(sorted(missing_columns))
+        raise ValueError(f"laps is missing required columns: {names}")
+
+    result = laps.copy()
+    result["_trace_original_order"] = range(len(result))
+    ordered = result.sort_values(["Driver", "LapNumber"], kind="stable")
+    grouped = ordered.groupby("Driver", sort=False)
+    for column in _LAGGED_DRIVER_CONTEXT_COLUMNS:
+        ordered[f"Prev{column}"] = grouped[column].shift(1)
+
+    lap_numbers = pd.to_numeric(laps["LapNumber"], errors="coerce")
+    if lap_numbers.isna().any():
+        raise ValueError("LapNumber must contain numeric values")
+    proxy_by_lap = laps.assign(_lap_number=lap_numbers).groupby(
+        "_lap_number", sort=True
+    )["TrackEvolutionProxy"].first()
+    previous_proxy = proxy_by_lap.shift(1)
+    ordered["PrevTrackEvolutionProxy"] = pd.to_numeric(
+        ordered["LapNumber"], errors="coerce"
+    ).map(previous_proxy)
+
+    return (
+        ordered.sort_values("_trace_original_order", kind="stable")
+        .drop(columns="_trace_original_order")
+    )

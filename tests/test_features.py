@@ -7,6 +7,7 @@ from trace.features import (
     TYRE_POSITIONS,
     add_telemetry_features,
     add_opponent_context_features,
+    add_lagged_context_features,
     add_track_evolution_proxy,
     add_tyre_residual_features,
     add_weather_track_features,
@@ -328,4 +329,56 @@ def test_add_track_evolution_proxy_is_causal_and_session_specific() -> None:
         "TrackEvolutionProxy"
     ].tolist()
     assert new_session["TrackEvolutionProxy"].tolist() == [80.0]
+    pd.testing.assert_frame_equal(laps, original)
+
+
+def test_add_lagged_context_features_stays_within_driver_and_prior_laps() -> None:
+    laps = pd.DataFrame(
+        {
+            "Driver": ["A", "A", "A", "B", "B"],
+            "LapNumber": [2.0, 1.0, 3.0, 1.0, 2.0],
+            "TrackEvolutionProxy": [200.0, 100.0, 300.0, 100.0, 200.0],
+            "AvgSpeed": [20.0, 10.0, 30.0, 100.0, 200.0],
+            "AvgThrottle": [2.0, 1.0, 3.0, 10.0, 20.0],
+            "BrakeUsage": [0.2, 0.1, 0.3, 0.4, 0.5],
+            "BrakeDuration": [2.0, 1.0, 3.0, 4.0, 5.0],
+            "BrakingIntensity": [20.0, 10.0, 30.0, 40.0, 50.0],
+            "BrakingFrequency": [2.0, 1.0, 3.0, 4.0, 5.0],
+            "ThrottleAggressiveness": [20.0, 10.0, 30.0, 40.0, 50.0],
+            "SpeedVariation": [2.0, 1.0, 3.0, 4.0, 5.0],
+            "Position": [2.0, 1.0, 3.0, 1.0, 2.0],
+            "RelativePaceToAhead": [0.2, 0.1, 0.3, None, 0.5],
+            "RelativePaceToBehind": [-0.2, -0.1, -0.3, -0.4, -0.5],
+            "OpponentAheadCompound": ["SOFT", None, "HARD", None, "MEDIUM"],
+            "OpponentAheadTyreLife": [2.0, None, 4.0, None, 5.0],
+        }
+    )
+    original = laps.copy()
+
+    result = add_lagged_context_features(laps)
+    with_future = add_lagged_context_features(
+        pd.concat(
+            [
+                laps,
+                pd.DataFrame({column: [value] for column, value in laps.iloc[-1].items()}),
+            ],
+            ignore_index=True,
+        ).assign(LapNumber=lambda frame: frame["LapNumber"].where(frame.index != 5, 4.0))
+    )
+
+    assert result["PrevAvgSpeed"].tolist() == pytest.approx(
+        [10.0, float("nan"), 20.0, float("nan"), 100.0], nan_ok=True
+    )
+    assert result["PrevPosition"].tolist() == pytest.approx(
+        [1.0, float("nan"), 2.0, float("nan"), 1.0], nan_ok=True
+    )
+    assert result["PrevTrackEvolutionProxy"].tolist() == pytest.approx(
+        [100.0, float("nan"), 200.0, float("nan"), 100.0], nan_ok=True
+    )
+    assert pd.isna(result.loc[1, "PrevOpponentAheadCompound"])
+    pd.testing.assert_series_equal(
+        with_future.loc[:4, "PrevAvgSpeed"].reset_index(drop=True),
+        result["PrevAvgSpeed"].reset_index(drop=True),
+    )
+    pd.testing.assert_frame_equal(result[original.columns], original)
     pd.testing.assert_frame_equal(laps, original)
